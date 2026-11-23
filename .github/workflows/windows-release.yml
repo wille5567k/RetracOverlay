@@ -1,0 +1,48 @@
+name: Build Windows EXE
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Build self-contained Windows x64 EXE
+        run: dotnet publish RetracOverlay.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o publish
+      - name: Verify standalone output
+        shell: pwsh
+        run: |
+          $files = @(Get-ChildItem publish -Force)
+          if ($files.Count -ne 1 -or $files[0].Name -ne 'RetracOverlay.exe' -or $files[0].Length -le 0) {
+            throw 'Expected exactly one nonempty file, RetracOverlay.exe.'
+          }
+      - name: Publish versioned release
+        if: github.event_name == 'push'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+          $tagOptions = @('--verify-tag')
+          if ($env:GITHUB_REF_TYPE -eq 'branch') {
+            $tag = 'v1.0.0'
+            $tagOptions = @('--target', $env:GITHUB_SHA)
+          }
+          $releases = gh release list --json tagName --limit 100
+          if ($LASTEXITCODE -ne 0) { throw 'Could not list GitHub releases.' }
+          if (($releases | ConvertFrom-Json).tagName -contains $tag) { exit 0 }
+          gh release create $tag publish/RetracOverlay.exe @tagOptions --latest --title "RetracOverlay $tag" --notes "Fristående Windows x64-prototyp. F8 visar eller döljer menyn. Ingen live-ESP, aimbot eller anti-cheat-bypass."
